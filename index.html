@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MSU Manhunt</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #111827; color: #f3f4f6; }
+        #map { height: 100%; width: 100%; z-index: 10; }
+        .hidden { display: none !important; }
+        
+        /* Tactical custom map markers */
+        .marker-hunter { background-color: #ef4444; border: 2px solid white; border-radius: 50%; width: 16px; height: 16px; box-shadow: 0 0 8px #ef4444; }
+        .marker-runner { background-color: #3b82f6; border: 2px solid white; border-radius: 50%; width: 16px; height: 16px; box-shadow: 0 0 8px #3b82f6; }
+        .marker-driver { background-color: #f97316; border: 2px solid white; border-radius: 50%; width: 16px; height: 16px; box-shadow: 0 0 8px #f97316; }
+        .marker-self { border-color: #fbbf24; border-width: 3px; z-index: 1000 !important; }
+        
+        /* Dark mode map filter for standard OSM tiles (guarantees no API key limits) */
+        .leaflet-tile { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col overflow-hidden">
+
+    <!-- Auth / Loading State -->
+    <div id="loadingView" class="flex-1 flex items-center justify-center flex-col">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4"></div>
+        <p class="text-gray-400">Connecting to secure server...</p>
+    </div>
+
+    <!-- Home View -->
+    <div id="homeView" class="hidden flex-1 flex flex-col items-center justify-center p-6 space-y-8">
+        <div class="text-center">
+            <h1 class="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-500 tracking-tighter mb-2">MANHUNT</h1>
+            <p class="text-green-400 font-mono text-sm tracking-widest uppercase">MSU Campus Edition</p>
+        </div>
+
+        <div class="w-full max-w-sm space-y-4 bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700">
+            <div>
+                <label class="block text-sm font-medium text-gray-400 mb-1">Operative Nickname</label>
+                <div class="flex space-x-2">
+                    <input type="text" id="nicknameInput" class="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500 transition" placeholder="e.g. Ghost">
+                    <button id="genCallsignBtn" class="bg-gray-700 hover:bg-gray-600 text-white p-3 rounded-lg transition border border-gray-600 flex items-center justify-center w-14" title="Generate AI Callsign">
+                        🎲
+                    </button>
+                </div>
+            </div>
+            
+            <button id="createLobbyBtn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-lg shadow-red-500/30">
+                Create New Operation
+            </button>
+            
+            <div class="relative flex items-center py-2">
+                <div class="flex-grow border-t border-gray-700"></div>
+                <span class="flex-shrink-0 mx-4 text-gray-500 text-sm">OR</span>
+                <div class="flex-grow border-t border-gray-700"></div>
+            </div>
+
+            <div class="flex space-x-2">
+                <input type="text" id="joinCodeInput" class="w-2/3 bg-gray-900 border border-gray-700 rounded-lg p-3 text-white text-center font-mono uppercase focus:outline-none focus:border-blue-500" placeholder="CODE" maxlength="4">
+                <button id="joinLobbyBtn" class="w-1/3 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-lg shadow-blue-500/30">
+                    Join
+                </button>
+            </div>
+        </div>
+        <div id="homeError" class="text-red-400 text-sm font-semibold h-6"></div>
+    </div>
+
+    <!-- Lobby View -->
+    <div id="lobbyView" class="hidden flex-1 flex flex-col p-6 max-w-md mx-auto w-full relative">
+        <button id="leaveLobbyBtn" class="absolute top-6 left-6 text-gray-400 hover:text-white">&larr; Back</button>
+        <div class="text-center mt-8 mb-6">
+            <h2 class="text-2xl font-bold">Operation Briefing</h2>
+            <p class="text-gray-400 text-sm mt-1">Access Code:</p>
+            <div class="text-4xl font-mono font-black tracking-widest text-green-400 mt-1" id="lobbyCodeDisplay">----</div>
+        </div>
+
+        <div class="flex-1 bg-gray-800 rounded-2xl border border-gray-700 p-4 shadow-lg overflow-y-auto mb-4">
+            <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-700 pb-2 mb-3">Roster (<span id="playerCount">0</span>)</h3>
+            <ul id="playerList" class="space-y-3">
+                <!-- Players injected here -->
+            </ul>
+        </div>
+
+        <button id="startGameBtn" class="hidden w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-4 rounded-xl transition shadow-lg shadow-green-500/30 text-lg uppercase tracking-wide">
+            Commence Operation
+        </button>
+        <p id="waitingForHostMsg" class="text-center text-gray-400 animate-pulse hidden">Waiting for host to commence...</p>
+    </div>
+
+    <!-- Game View -->
+    <div id="gameView" class="hidden flex-1 flex flex-col h-full w-full bg-gray-900">
+        <!-- Static Top Bar (No overlap on mobile) -->
+        <div class="bg-gray-900 border-b border-gray-800 z-[1000] p-3 flex justify-between items-center shadow-md shrink-0">
+            <div class="flex flex-col">
+                <span class="text-[10px] text-gray-400 uppercase tracking-widest leading-none mb-1">Role</span>
+                <span id="myRoleDisplay" class="font-bold text-base text-white capitalize leading-none">Loading...</span>
+            </div>
+            <div class="flex flex-col items-end">
+                <span class="text-[10px] text-gray-400 uppercase tracking-widest leading-none mb-1">Code</span>
+                <span id="gameCodeDisplay" class="font-mono font-bold text-base text-green-400 leading-none">----</span>
+            </div>
+        </div>
+
+        <!-- Map & HUD Container -->
+        <div class="flex-1 relative w-full h-full">
+            <div id="map" class="absolute inset-0 z-10"></div>
+            
+            <!-- HQ Comms Toggle (Floating Bottom Right) -->
+            <button id="hqToggleBtn" class="absolute bottom-20 right-4 z-[1000] bg-blue-600 hover:bg-blue-700 border border-blue-500 text-white rounded-full h-14 w-14 shadow-lg shadow-blue-900/50 transition flex items-center justify-center font-bold text-2xl">
+                💬
+            </button>
+
+            <!-- HQ Comms Panel -->
+            <div id="hqPanel" class="hidden absolute bottom-36 right-4 w-[calc(100vw-2rem)] max-w-sm bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-[1000] flex flex-col overflow-hidden transition-all h-96 max-h-[50vh]">
+                <div class="bg-gray-800 p-3 border-b border-gray-700 flex justify-between items-center">
+                    <span class="font-bold text-blue-400 flex items-center gap-2">🤖 OVERWATCH AI</span>
+                    <button id="hqCloseBtn" class="text-gray-400 hover:text-white text-3xl leading-none px-2">&times;</button>
+                </div>
+                <div id="hqMessages" class="flex-1 p-3 overflow-y-auto space-y-3 text-sm flex flex-col">
+                    <div class="bg-gray-800 text-gray-300 p-2 rounded-lg rounded-tl-none self-start max-w-[85%] border border-gray-700">
+                        Connection established. Overwatch online. Need tactical advice or a situational update, operative?
+                    </div>
+                </div>
+                <div class="p-3 bg-gray-800 border-t border-gray-700 flex space-x-2">
+                    <input type="text" id="hqInput" class="flex-1 bg-gray-900 border border-gray-700 rounded-lg p-2 text-white text-sm focus:outline-none focus:border-blue-500" placeholder="Request intel...">
+                    <button id="hqSendBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition font-bold text-sm">Send</button>
+                </div>
+            </div>
+
+            <!-- GPS Status -->
+            <div class="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-[1000] bg-gray-900/95 border border-gray-700 rounded-full px-5 py-2.5 flex items-center shadow-xl backdrop-blur-sm whitespace-nowrap">
+                <div id="gpsIndicator" class="w-3 h-3 rounded-full bg-red-500 mr-2 shrink-0"></div>
+                <span id="gpsText" class="text-sm font-medium text-gray-300">Acquiring...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Modal -->
+    <div id="customModal" class="fixed inset-0 bg-black/80 z-[2000] hidden flex items-center justify-center p-4">
+        <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 id="modalTitle" class="text-xl font-bold text-white mb-2">Notice</h3>
+            <p id="modalMessage" class="text-gray-300 mb-6"></p>
+            <button id="modalBtn" class="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 rounded-lg transition">OK</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Environment Setup
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'msu-manhunt-v1';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            projectId: "demo-project", // Fallbacks to prevent crash if not injected
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // App State
+        let currentUser = null;
+        let currentLobbyCode = null;
+        let isHost = false;
+        let unsubscribeLobby = null;
+        let map = null;
+        let markers = {};
+        let geoWatchId = null;
+        let myRole = 'runner'; // Default
+
+        // DOM Elements
+        const views = {
+            loading: document.getElementById('loadingView'),
+            home: document.getElementById('homeView'),
+            lobby: document.getElementById('lobbyView'),
+            game: document.getElementById('gameView')
+        };
+        const els = {
+            nickname: document.getElementById('nicknameInput'),
+            createBtn: document.getElementById('createLobbyBtn'),
+            joinInput: document.getElementById('joinCodeInput'),
+            joinBtn: document.getElementById('joinLobbyBtn'),
+            homeError: document.getElementById('homeError'),
+            lobbyCode: document.getElementById('lobbyCodeDisplay'),
+            playerList: document.getElementById('playerList'),
+            startGameBtn: document.getElementById('startGameBtn'),
+            waitingMsg: document.getElementById('waitingForHostMsg'),
+            leaveLobbyBtn: document.getElementById('leaveLobbyBtn'),
+            myRole: document.getElementById('myRoleDisplay'),
+            gameCode: document.getElementById('gameCodeDisplay'),
+            gpsIndicator: document.getElementById('gpsIndicator'),
+            gpsText: document.getElementById('gpsText'),
+            modal: document.getElementById('customModal'),
+            modalTitle: document.getElementById('modalTitle'),
+            modalMsg: document.getElementById('modalMessage'),
+            modalBtn: document.getElementById('modalBtn'),
+            genCallsignBtn: document.getElementById('genCallsignBtn'),
+            hqToggleBtn: document.getElementById('hqToggleBtn'),
+            hqPanel: document.getElementById('hqPanel'),
+            hqCloseBtn: document.getElementById('hqCloseBtn'),
+            hqMessages: document.getElementById('hqMessages'),
+            hqInput: document.getElementById('hqInput'),
+            hqSendBtn: document.getElementById('hqSendBtn')
+        };
+
+        // Gemini API Config
+        const geminiApiKey = ""; // Handled automatically by the Canvas environment
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${geminiApiKey}`;
+
+        // --- AI Features ---
+        
+        // Generate AI Callsign
+        els.genCallsignBtn.addEventListener('click', async () => {
+            const btn = els.genCallsignBtn;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<div class="animate-spin h-4 w-4 border-b-2 border-white rounded-full mx-auto"></div>';
+            btn.disabled = true;
+
+            const payload = {
+                contents: [{ parts: [{ text: "Generate a cool, one-word tactical callsign for a manhunt game (e.g., Ghost, Viper, Shadow). Output ONLY the word, no punctuation." }] }],
+                systemInstruction: { parts: [{ text: "You are a military callsign generator. Respond with exactly one word and nothing else." }] }
+            };
+
+            try {
+                const response = await fetch(geminiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    els.nickname.value = result.candidates[0].content.parts[0].text.trim().replace(/['"]/g, '');
+                }
+            } catch (e) {
+                console.error("Failed to generate callsign:", e);
+                showModal("Comms Error", "Failed to reach AI generator.");
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        });
+
+        // HQ Comms Logic
+        let hqChatHistory = [];
+
+        function toggleHQPanel() {
+            els.hqPanel.classList.toggle('hidden');
+        }
+        els.hqToggleBtn.addEventListener('click', toggleHQPanel);
+        els.hqCloseBtn.addEventListener('click', toggleHQPanel);
+
+        function appendHQMessage(text, isUser = false) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `p-2 rounded-lg max-w-[85%] border text-sm ${isUser ? 'bg-blue-600/20 text-blue-100 rounded-tr-none self-end border-blue-500/30' : 'bg-gray-800 text-gray-300 rounded-tl-none self-start border-gray-700'}`;
+            msgDiv.textContent = text;
+            els.hqMessages.appendChild(msgDiv);
+            els.hqMessages.scrollTop = els.hqMessages.scrollHeight;
+        }
+
+        els.hqSendBtn.addEventListener('click', async () => {
+            const text = els.hqInput.value.trim();
+            if (!text) return;
+
+            els.hqInput.value = '';
+            appendHQMessage(text, true);
+            els.hqSendBtn.disabled = true;
+
+            hqChatHistory.push({ role: "user", parts: [{ text }] });
+
+            const payload = {
+                contents: hqChatHistory,
+                systemInstruction: {
+                    parts: [{ text: `You are 'OVERWATCH', an immersive AI tactical assistant for a live-action Manhunt game at Michigan State University. The current operative's role is ${myRole.toUpperCase()}. Provide short, punchy, immersive, tactical responses. Offer strategies, game rules clarifications, or flavor text. Do not break character.` }]
+                }
+            };
+
+            try {
+                const response = await fetch(geminiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                const reply = result.candidates?.[0]?.content?.parts?.[0]?.text || "Transmission garbled. Repeat.";
+                
+                hqChatHistory.push({ role: "model", parts: [{ text: reply }] });
+                appendHQMessage(reply, false);
+            } catch (e) {
+                console.error("HQ Error:", e);
+                appendHQMessage("Connection to OVERWATCH lost. Interference detected.", false);
+                hqChatHistory.pop(); // Remove the user message from history if failed
+            } finally {
+                els.hqSendBtn.disabled = false;
+            }
+        });
+
+        els.hqInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') els.hqSendBtn.click();
+        });
+
+
+        // Utility: Show View
+        function showView(viewName) {
+            Object.values(views).forEach(v => v.classList.add('hidden'));
+            views[viewName].classList.remove('hidden');
+            if (viewName === 'game' && !map) initMap();
+        }
+
+        // Utility: Show Modal
+        function showModal(title, message) {
+            els.modalTitle.textContent = title;
+            els.modalMsg.textContent = message;
+            els.modal.classList.remove('hidden');
+        }
+        els.modalBtn.onclick = () => els.modal.classList.add('hidden');
+
+        // Authentication
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Auth error:", error);
+                showModal("Connection Error", "Failed to connect to the secure server.");
+            }
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                showView('home');
+            }
+        });
+
+        // Generate 4-letter code
+        function generateCode() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Excluded confusing chars
+            let result = '';
+            for (let i = 0; i < 4; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+            return result;
+        }
+
+        // Create Lobby
+        els.createBtn.addEventListener('click', async () => {
+            const nickname = els.nickname.value.trim() || 'Operator ' + Math.floor(Math.random()*1000);
+            if (!currentUser) return;
+
+            els.createBtn.disabled = true;
+            const code = generateCode();
+            
+            try {
+                const lobbyRef = doc(db, 'artifacts', appId, 'public', 'data', 'lobbies', code);
+                await setDoc(lobbyRef, {
+                    status: 'waiting',
+                    hostId: currentUser.uid,
+                    players: {
+                        [currentUser.uid]: {
+                            nickname: nickname,
+                            role: 'runner',
+                            lat: null,
+                            lng: null,
+                            updatedAt: Date.now()
+                        }
+                    }
+                });
+                
+                currentLobbyCode = code;
+                isHost = true;
+                joinLobbySession(code);
+            } catch (e) {
+                console.error(e);
+                els.homeError.textContent = "Failed to create operation.";
+                els.createBtn.disabled = false;
+            }
+        });
+
+        // Join Lobby
+        els.joinBtn.addEventListener('click', async () => {
+            const code = els.joinInput.value.trim().toUpperCase();
+            const nickname = els.nickname.value.trim() || 'Operator ' + Math.floor(Math.random()*1000);
+            if (!currentUser || code.length !== 4) {
+                els.homeError.textContent = "Valid 4-character code required.";
+                return;
+            }
+
+            els.joinBtn.disabled = true;
+            try {
+                const lobbyRef = doc(db, 'artifacts', appId, 'public', 'data', 'lobbies', code);
+                const snap = await getDoc(lobbyRef);
+                
+                if (!snap.exists()) {
+                    els.homeError.textContent = "Operation not found.";
+                    els.joinBtn.disabled = false;
+                    return;
+                }
+
+                if (snap.data().status === 'playing') {
+                    els.homeError.textContent = "Operation already in progress.";
+                    els.joinBtn.disabled = false;
+                    return;
+                }
+
+                // Add self to players
+                await updateDoc(lobbyRef, {
+                    [`players.${currentUser.uid}`]: {
+                        nickname: nickname,
+                        role: 'runner',
+                        lat: null,
+                        lng: null,
+                        updatedAt: Date.now()
+                    }
+                });
+
+                currentLobbyCode = code;
+                isHost = false;
+                joinLobbySession(code);
+            } catch (e) {
+                console.error(e);
+                els.homeError.textContent = "Failed to join operation.";
+                els.joinBtn.disabled = false;
+            }
+        });
+
+        // Listen to Lobby State
+        function joinLobbySession(code) {
+            showView('lobby');
+            els.lobbyCode.textContent = code;
+            els.gameCode.textContent = code;
+            
+            if (isHost) {
+                els.startGameBtn.classList.remove('hidden');
+                els.waitingMsg.classList.add('hidden');
+            } else {
+                els.startGameBtn.classList.add('hidden');
+                els.waitingMsg.classList.remove('hidden');
+            }
+
+            const lobbyRef = doc(db, 'artifacts', appId, 'public', 'data', 'lobbies', code);
+            unsubscribeLobby = onSnapshot(lobbyRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    handleLeave();
+                    showModal("Operation Terminated", "The host closed the operation.");
+                    return;
+                }
+                
+                const data = docSnap.data();
+                renderLobbyPlayers(data.players, data.hostId);
+
+                // Check if game started
+                if (data.status === 'playing' && views.lobby.classList.contains('hidden') === false) {
+                    startGame(data.players[currentUser.uid].role);
+                }
+
+                // Update markers if in game
+                if (data.status === 'playing' && views.game.classList.contains('hidden') === false) {
+                    updateMapMarkers(data.players);
+                }
+            }, (error) => {
+                console.error("Sync error:", error);
+            });
+        }
+
+        // Render Players in Lobby
+        function renderLobbyPlayers(playersMap, hostId) {
+            els.playerList.innerHTML = '';
+            let count = 0;
+            
+            for (const [uid, pData] of Object.entries(playersMap)) {
+                count++;
+                const isMe = uid === currentUser.uid;
+                const isThisHost = uid === hostId;
+                
+                const li = document.createElement('li');
+                li.className = "flex items-center justify-between bg-gray-700/50 p-3 rounded-lg border border-gray-600";
+                
+                let leftHtml = `<div class="flex flex-col">
+                    <span class="font-bold text-white flex items-center gap-2">
+                        ${pData.nickname} ${isMe ? '<span class="text-xs bg-gray-600 px-2 py-0.5 rounded text-gray-300">You</span>' : ''}
+                        ${isThisHost ? '<span class="text-xs bg-yellow-600/50 text-yellow-300 px-2 py-0.5 rounded border border-yellow-500/30">Host</span>' : ''}
+                    </span>
+                </div>`;
+
+                let rightHtml = '';
+                if (isHost) {
+                    rightHtml = `
+                        <select onchange="window.updatePlayerRole('${uid}', this.value)" class="bg-gray-800 border border-gray-600 text-sm rounded-md p-1 focus:outline-none">
+                            <option value="runner" ${pData.role === 'runner' ? 'selected' : ''}>Runner</option>
+                            <option value="hunter" ${pData.role === 'hunter' ? 'selected' : ''}>Hunter</option>
+                            <option value="driver" ${pData.role === 'driver' ? 'selected' : ''}>Driver</option>
+                        </select>
+                    `;
+                } else {
+                    const roleColors = { runner: 'text-blue-400', hunter: 'text-red-400', driver: 'text-orange-400' };
+                    rightHtml = `<span class="text-sm font-bold uppercase tracking-wider ${roleColors[pData.role]}">${pData.role}</span>`;
+                }
+
+                li.innerHTML = leftHtml + rightHtml;
+                els.playerList.appendChild(li);
+            }
+            document.getElementById('playerCount').textContent = count;
+        }
+
+        // Global function for host to update roles
+        window.updatePlayerRole = async (uid, newRole) => {
+            if (!isHost || !currentLobbyCode) return;
+            const lobbyRef = doc(db, 'artifacts', appId, 'public', 'data', 'lobbies', currentLobbyCode);
+            await updateDoc(lobbyRef, {
+                [`players.${uid}.role`]: newRole
+            });
+        };
+
+        // Host Starts Game
+        els.startGameBtn.addEventListener('click', async () => {
+            if (!isHost || !currentLobbyCode) return;
+            const lobbyRef = doc(db, 'artifacts', appId, 'public', 'data', 'lobbies', currentLobbyCode);
+            await updateDoc(lobbyRef, { status: 'playing' });
+        });
+
+        // Leave Lobby
+        function handleLeave() {
+            if (unsubscribeLobby) unsubscribeLobby();
+            currentLobbyCode = null;
+            isHost = false;
+            els.createBtn.disabled = false;
+            els.joinBtn.disabled = false;
+            if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
+            showView('home');
+        }
+        els.leaveLobbyBtn.addEventListener('click', handleLeave);
+
+        // --- GAME LOGIC ---
+
+        function startGame(role) {
+            myRole = role;
+            els.myRole.textContent = role;
+            
+            // Set role colors in header
+            els.myRole.className = "font-bold text-lg capitalize " + 
+                (role === 'hunter' ? 'text-red-400' : role === 'driver' ? 'text-orange-400' : 'text-blue-400');
+
+            showView('game');
+            startGPS();
+        }
+
+        function initMap() {
+            // Center on MSU Campus roughly
+            map = L.map('map', { zoomControl: false }).setView([42.7298, -84.4805], 15);
+            
+            // Replaced with standard OpenStreetMap to guarantee no API key requirements
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap',
+                maxZoom: 19
+            }).addTo(map);
+
+            // Draw Campus Boundary (South of Grand River, rough estimation)
+            const campusBounds = [
+                [42.7350, -84.4950], // NW (Grand River & Harrison)
+                [42.7350, -84.4650], // NE (Grand River & Hagadorn)
+                [42.7150, -84.4650], // SE (Mt Hope & Hagadorn)
+                [42.7150, -84.4950]  // SW (Mt Hope & Harrison)
+            ];
+
+            L.polygon(campusBounds, {
+                color: '#ef4444',
+                weight: 2,
+                opacity: 0.5,
+                fillColor: '#ef4444',
+                fillOpacity: 0.05,
+                dashArray: '5, 5'
+            }).addTo(map);
+
+            // Add a label for the zone
+            const boundsCenter = [42.7250, -84.4800];
+            L.marker(boundsCenter, {
+                icon: L.divIcon({
+                    className: 'text-gray-500/50 font-bold text-2xl uppercase tracking-widest text-center whitespace-nowrap -rotate-12',
+                    html: 'Operation Zone',
+                    iconSize: [200, 40]
+                })
+            }).addTo(map);
+
+            // Force resize after view transition
+            setTimeout(() => map.invalidateSize(), 500);
+        }
+
+        function updateMapMarkers(playersMap) {
+            if (!map) return;
+
+            // Remove markers for players who left
+            Object.keys(markers).forEach(uid => {
+                if (!playersMap[uid]) {
+                    map.removeLayer(markers[uid]);
+                    delete markers[uid];
+                }
+            });
+
+            for (const [uid, pData] of Object.entries(playersMap)) {
+                if (pData.lat && pData.lng) {
+                    const isMe = uid === currentUser.uid;
+                    const pos = [pData.lat, pData.lng];
+                    
+                    if (markers[uid]) {
+                        markers[uid].setLatLng(pos);
+                    } else {
+                        // Create custom icon based on role
+                        const iconHtml = `<div class="marker-${pData.role} ${isMe ? 'marker-self' : ''}"></div>`;
+                        const customIcon = L.divIcon({
+                            className: 'bg-transparent',
+                            html: iconHtml,
+                            iconSize: [16, 16],
+                            iconAnchor: [8, 8]
+                        });
+
+                        markers[uid] = L.marker(pos, { icon: customIcon }).addTo(map)
+                            .bindPopup(`<b>${pData.nickname}</b><br>${pData.role}`);
+                    }
+                }
+            }
+        }
+
+        function startGPS() {
+            if (!("geolocation" in navigator)) {
+                els.gpsText.textContent = "GPS Unavailable";
+                return;
+            }
+
+            els.gpsText.textContent = "Acquiring Signal...";
+            els.gpsIndicator.className = "w-3 h-3 rounded-full mr-2 bg-yellow-500 animate-pulse";
+
+            geoWatchId = navigator.geolocation.watchPosition(
+                async (pos) => {
+                    els.gpsText.textContent = "Transmitting";
+                    els.gpsIndicator.className = "w-3 h-3 rounded-full mr-2 bg-green-500";
+                    
+                    const lat = pos.coords.latitude;
+                    const lng = pos.coords.longitude;
+
+                    // Optional: Center map on first fix
+                    if (!markers[currentUser.uid]) {
+                        map.setView([lat, lng], 16);
+                    }
+
+                    // Update Firebase
+                    if (currentLobbyCode) {
+                        try {
+                            const lobbyRef = doc(db, 'artifacts', appId, 'public', 'data', 'lobbies', currentLobbyCode);
+                            await updateDoc(lobbyRef, {
+                                [`players.${currentUser.uid}.lat`]: lat,
+                                [`players.${currentUser.uid}.lng`]: lng,
+                                [`players.${currentUser.uid}.updatedAt`]: Date.now()
+                            });
+                        } catch (e) {
+                            console.error("Failed to update location:", e);
+                            els.gpsIndicator.className = "w-3 h-3 rounded-full mr-2 bg-red-500";
+                        }
+                    }
+                },
+                (err) => {
+                    // Extract specific error details instead of logging the raw object
+                    console.error(`GPS Error [Code ${err.code}]: ${err.message}`);
+                    
+                    let errorMsg = "GPS Error";
+                    switch(err.code) {
+                        case 1: errorMsg = "GPS Denied"; break;     // PERMISSION_DENIED
+                        case 2: errorMsg = "Signal Lost"; break;    // POSITION_UNAVAILABLE
+                        case 3: errorMsg = "GPS Timeout"; break;    // TIMEOUT
+                    }
+                    
+                    els.gpsText.textContent = errorMsg;
+                    els.gpsIndicator.className = "w-3 h-3 rounded-full mr-2 bg-red-500";
+                },
+                { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+            );
+        }
+
+        // Start App
+        initAuth();
+
+    </script>
+</body>
+</html>
