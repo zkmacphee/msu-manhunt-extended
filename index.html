@@ -153,9 +153,17 @@
         import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Environment Setup
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'msu-manhunt-v1';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            projectId: "demo-project", // Fallbacks to prevent crash if not injected
+        const appId = 'msu-manhunt-v1'; 
+        
+        // PASTE YOUR FIREBASE CONFIG HERE:
+        const firebaseConfig = {
+            apiKey: "PASTE_YOUR_API_KEY_HERE",
+            authDomain: "msu-manhunt.firebaseapp.com",
+            projectId: "msu-manhunt",
+            storageBucket: "msu-manhunt.firebasestorage.app",
+            messagingSenderId: "75141180143",
+            appId: "1:75141180143:web:1b93de05c621f70665891a",
+            measurementId: "G-CHKYVD179W"
         };
 
         const app = initializeApp(firebaseConfig);
